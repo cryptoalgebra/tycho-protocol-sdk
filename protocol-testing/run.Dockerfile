@@ -26,8 +26,13 @@ COPY . .
 # Build EVM contracts first (protocol-testing depends on the runtime JSON files)
 WORKDIR /build/tycho-protocol-sdk/evm
 COPY --from=foundry-builder /root/.foundry/bin/forge /usr/local/bin/forge
-RUN chmod +x /usr/local/bin/forge
+COPY --from=foundry-builder /root/.foundry/bin/cast /usr/local/bin/cast
+RUN chmod +x /usr/local/bin/forge /usr/local/bin/cast
 RUN forge build
+RUN sed -i 's/\r$//' scripts/buildRuntime.sh && bash scripts/buildRuntime.sh \
+    -c SupernovaV3Adapter \
+    -s "constructor(address)" \
+    -a "0x44B7fBd4D87149eFa5347c451E74B9FD18E89c55"
 
 # Build substreams (wasm targets only - source not needed in final image)
 WORKDIR /build/tycho-protocol-sdk/substreams
@@ -77,7 +82,7 @@ RUN mkdir -p /filtered/target/wasm32-unknown-unknown/release && \
 # =========== Final Runtime Image ===========
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates libssl3 libpq5 && \
+RUN apt-get update && apt-get install -y ca-certificates libssl3 libpq5 python3 && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/* && \
     find /usr/lib -name "*.a" -delete && \
     find /usr/lib -name "*.la" -delete
@@ -86,13 +91,15 @@ RUN apt-get update && apt-get install -y ca-certificates libssl3 libpq5 && \
 COPY --from=tycho-indexer-builder /build/tycho-indexer/target/release/tycho-indexer /usr/local/bin/tycho-indexer
 COPY --from=protocol-sdk-builder /build/tycho-protocol-sdk/protocol-testing/target/release/protocol-testing /usr/local/bin/tycho-protocol-sdk
 COPY --from=protocol-sdk-builder /build/tycho-protocol-sdk/protocol-testing/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY --from=protocol-sdk-builder /build/tycho-protocol-sdk/protocol-testing/supernova-indexer-entrypoint.sh /supernova-indexer-entrypoint.sh
+RUN chmod +x /entrypoint.sh /supernova-indexer-entrypoint.sh
 
 # Create minimal directory structure
 RUN mkdir -p /app/proto /app/evm
 
 # Copy proto files (needed for substreams pack)  
 COPY --from=protocol-sdk-builder /build/tycho-protocol-sdk/proto /app/proto
+COPY --from=protocol-sdk-builder /build/tycho-protocol-sdk/protocol-testing/extractors.yaml /app/protocol-testing/extractors.yaml
 
 # Copy EVM directory
 COPY --from=protocol-sdk-builder /build/tycho-protocol-sdk/evm/out /app/evm/out
@@ -127,6 +134,7 @@ COPY --from=substreams-cli /app/substreams /usr/local/bin/substreams
 RUN chmod +x /usr/local/bin/substreams
 COPY --from=foundry-builder /root/.foundry/bin/forge /usr/local/bin/forge
 COPY --from=foundry-builder /root/.foundry/bin/cast /usr/local/bin/cast
+RUN chmod +x /app/evm/scripts/*.sh /usr/local/bin/forge /usr/local/bin/cast
 
 # Strip binaries to reduce size
 RUN strip /usr/local/bin/* 2>/dev/null || true

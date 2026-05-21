@@ -1,0 +1,56 @@
+services:
+  db:
+    build:
+      context: .
+      dockerfile: postgres.Dockerfile
+    image: protocol-testing-db:latest
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    environment:
+      POSTGRES_PASSWORD: mypassword
+      POSTGRES_USER: postgres
+      POSTGRES_DB: ${DB_NAME:-tycho_indexer_0}
+    command: postgres -c shared_preload_libraries=pg_partman_bgw,pg_cron -c cron.database_name=${DB_NAME:-tycho_indexer_0}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    shm_size: "1gb"
+    volumes:
+      - supernova_postgres_data:/var/lib/postgresql/data
+
+  indexer:
+    build:
+      context: ..
+      dockerfile: protocol-testing/run.Dockerfile
+      args:
+        PROTOCOLS: supernova-v3
+    image: supernova-tycho-indexer:latest
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgres:mypassword@db:5432/${DB_NAME:-tycho_indexer_0}
+      RPC_URL: ${RPC_URL}
+      SUBSTREAMS_API_TOKEN: ${SUBSTREAMS_API_TOKEN}
+      AUTH_API_KEY: ${AUTH_API_KEY:-dummy}
+      RUST_LOG: ${RUST_LOG:-error,tycho_indexer=info,tycho_client=info}
+      CHAIN: ethereum
+      PROTOCOL_SYSTEM: supernova-v3-vm
+      PROTOCOL_TYPE: supernova_algebra_pool_vm
+      MODULE_NAME: map_pool_events
+      START_BLOCK: ${START_BLOCK:-24468499}
+      RETENTION_HORIZON: ${RETENTION_HORIZON:-2028-01-01T00:00:00}
+      INITIALIZED_ACCOUNTS: ${INITIALIZED_ACCOUNTS:-0x454e62e725ad5a47931043f7e6369cfbb879bdfd,0x27bb6d0c21a057b2ca52e3fcda2f801d17d5428c,0x428ea5b4ac84ab687851e6a2688411bdbd6c91af,0x6e9965973aebd5e3853255fcd84640b2b4c5a3f8,0x31eda5529b8f219243e8248eff368bc36a3f5975}
+    ports:
+      - "${TYCHO_RPC_PORT:-4242}:4242"
+    entrypoint: [ "/supernova-indexer-entrypoint.sh" ]
+
+volumes:
+  supernova_postgres_data:
